@@ -40,6 +40,7 @@ const EXAMPLE_COMPARE_REVISED = [
 const $ = (id) => document.getElementById(id);
 const resultEl = $("result");
 const redundancyEl = $("redundancy-result");
+const repairEl = $("repair-result");
 const inputEl = $("input");
 const lineSelect = $("redundancy-line");
 const compareEl = $("compare-result");
@@ -374,6 +375,116 @@ async function checkRedundancy() {
   }
 }
 
+// ---------- 冲突单行修订建议 ----------
+
+// 把建议的替换整行写回文本框对应原始行号（空行与原位保持不变），并触发 input 清空旧结果
+function applySuggestion(line, newLine) {
+  const lines = inputEl.value.split("\n");
+  if (line < 1 || line > lines.length) return;
+  lines[line - 1] = newLine;
+  inputEl.value = lines.join("\n");
+  inputEl.dispatchEvent(new Event("input"));
+  solve();  // 立即联立，确认修订后的文本已可解
+  inputEl.focus();
+}
+
+function renderRepairOk(data) {
+  repairEl.innerHTML = `
+    <div class="banner ok">
+      <h2>✓ 无需修订</h2>
+      <p>${esc(data.message || "原文本区间无冲突，无需修订。")}
+      （共 ${data.event_count} 个事件、${data.line_count} 条约束，可直接“联立核对”查看可行时间线。）</p>
+    </div>`;
+}
+
+function renderRepairConflict(data) {
+  const n = data.suggestion_count;
+  const banner = n > 0
+    ? `<div class="banner conflict">
+        <h2>✗ 区间存在冲突：找到 ${n} 条单行修订建议</h2>
+        <p>以下每条建议只放宽<strong>某一行的一个端点</strong>即可消除全部矛盾（已按改动分钟数、原始行号排序）；
+        改动量为移到“首次相交的整数分钟”的最小值。点击“填入此建议”会把替换后的整行写回上方文本框。</p>
+      </div>`
+    : `<div class="banner err">
+        <h2>✗ 区间存在冲突：没有单行修复方案</h2>
+        <p>已逐一尝试全部 ${data.checked_lines} 条原始行：删去任意一行后，其余行仍然互相矛盾，
+        只放宽某一行的某一个端点无法消除冲突，请至少修改两行，或结合矛盾链人工调整。</p>
+      </div>`;
+
+  const cards = data.suggestions.map((s) => {
+    const dirText = s.endpoint === "low"
+      ? `其余 ${data.line_count - 1} 行推出 ${esc(s.a)} → ${esc(s.b)} 的时间差最多为
+         <strong>${s.derived_high}</strong> 分钟，小于该行下界 ${s.low}；
+         只把<strong>下界（最少分钟）</strong>从 ${s.old_value} 放宽到 <strong>${s.new_value}</strong>
+         （改动 ${s.change_minutes} 分钟），区间即与推导区间首次相交。`
+      : `其余 ${data.line_count - 1} 行推出 ${esc(s.a)} → ${esc(s.b)} 的时间差至少为
+         <strong>${s.derived_low}</strong> 分钟，大于该行上界 ${s.high}；
+         只把<strong>上界（最多分钟）</strong>从 ${s.old_value} 放宽到 <strong>${s.new_value}</strong>
+         （改动 ${s.change_minutes} 分钟），区间即与推导区间首次相交。`;
+    return `
+    <div class="card repair-card">
+      <h3>第 ${s.line} 行：放宽${esc(s.endpoint_label)}，改动 ${s.change_minutes} 分钟</h3>
+      <table>
+        <thead><tr>
+          <th class="num">行号</th><th>事件对</th><th class="num">原区间</th>
+          <th class="num">其余行推导区间</th><th class="num">改动端点</th><th class="num">改动分钟</th>
+        </tr></thead>
+        <tbody><tr>
+          <td class="num">${s.line}</td>
+          <td>${esc(s.a)} → ${esc(s.b)}</td>
+          <td class="num">[${s.low}, ${s.high}]</td>
+          <td class="num">[${s.derived_low}, ${s.derived_high}]</td>
+          <td class="num">${esc(s.endpoint_label)} ${s.old_value} → ${s.new_value}</td>
+          <td class="num"><strong>${s.change_minutes}</strong></td>
+        </tr></tbody>
+      </table>
+      <p class="muted">${dirText}</p>
+      <p class="repair-newline">替换后的整行：<code>${esc(s.new_line)}</code>
+        <button class="repair-apply" data-line="${s.line}" data-newline="${esc(s.new_line)}">填入此建议</button>
+      </p>
+      ${s.forcing_lines.length
+        ? `<h3>迫使该端点移动的推导链（第 ${s.forcing_lines.join("、")} 行）</h3>
+           ${pathChainHtml(s.forcing_path)}
+           ${pathTableHtml(s.forcing_path)}`
+        : `<h3>迫使该端点移动的推导链</h3>
+           <p class="muted">迫使端点移动的是该行自身之外已无其他约束：两事件为同一事件，时间差恒为 0。</p>`}
+    </div>`;
+  }).join("");
+
+  repairEl.innerHTML = banner + cards;
+  repairEl.querySelectorAll(".repair-apply").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applySuggestion(parseInt(btn.dataset.line, 10), btn.dataset.newline);
+    });
+  });
+}
+
+async function fetchRepair() {
+  repairEl.innerHTML = `<div class="card muted">逐行尝试修订中…</div>`;
+  try {
+    const resp = await fetch("/api/repair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: inputEl.value }),
+    });
+    const data = await resp.json();
+    if (data.status === "ok") {
+      renderRepairOk(data);
+    } else if (data.status === "conflict") {
+      renderRepairConflict(data);
+    } else {
+      renderErrors(data.errors || [{ line: null, message: "未知错误。" }], repairEl);
+      repairEl.insertAdjacentHTML("afterbegin",
+        `<p class="muted">输入未通过校验，无法给出修订建议；请修正后重试。</p>`);
+    }
+  } catch (err) {
+    repairEl.innerHTML = `
+      <div class="banner err"><h2>请求失败</h2><p>${esc(err.message)}</p></div>`;
+  }
+}
+
+$("btn-repair").addEventListener("click", fetchRepair);
+
 $("btn-solve").addEventListener("click", solve);
 $("btn-example-ok").addEventListener("click", () => {
   inputEl.value = EXAMPLE_OK;
@@ -389,6 +500,7 @@ $("btn-clear").addEventListener("click", () => {
   inputEl.value = "";
   resultEl.innerHTML = "";
   redundancyEl.innerHTML = "";
+  repairEl.innerHTML = "";
   refreshLineOptions();
   inputEl.focus();
 });
@@ -396,6 +508,7 @@ $("btn-redundancy").addEventListener("click", checkRedundancy);
 inputEl.addEventListener("input", () => {
   refreshLineOptions();
   redundancyEl.innerHTML = "";  // 文本已变，旧的冗余结论作废
+  repairEl.innerHTML = "";      // 文本已变，旧的修订建议作废
 });
 refreshLineOptions();
 

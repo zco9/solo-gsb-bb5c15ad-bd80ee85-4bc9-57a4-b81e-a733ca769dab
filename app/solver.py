@@ -21,6 +21,12 @@
 两版均可解时，以“最早事件第 0 分钟”的规范化时刻按事件名对齐，列出共同事件的
 两版时刻与变化分钟数，并用 _derive_bound 复用冗余核对同款最短路推导，
 把推出修订时刻的修订行（原始行号、所用界值）作为变化证据；同时给出新增、删除事件。
+
+冲突单行修订建议（suggest_repairs）：文本语法有效但联立矛盾时，逐行暂时移除该行的
+上、下界约束；其余行仍矛盾的行排除，其余可解时用冗余核对同款最短路求这两个事件
+时间差的最紧可行区间，只放宽该行一个端点至首次相交的整数分钟（区间含整数端点，
+最小改动即“移到边界”），给出最小改动量、替换后的整行，以及迫使该端点移动的
+原始行号与界值推导链；建议按改动分钟数、原始行号排序，无单行修复时明确提示。
 """
 
 from __future__ import annotations
@@ -542,4 +548,120 @@ def compare_texts(base_text: str, revised_text: str) -> dict:
         "added_count": len(r_set - b_set),
         "removed_count": len(b_set - r_set),
         "alignment": alignment,
+    }
+
+
+# ---------- 冲突单行修订建议 ----------
+
+def _row_text(row: Row, low: int, high: int) -> str:
+    """把一条约束还原为输入格式的整行文本（事件名原样，界值替换为给定值）。"""
+    return f"{row.a},{row.b},{low},{high}"
+
+
+def suggest_repairs(text: str) -> dict:
+    """冲突单行修订建议：找出“只放宽某一行的某一个端点即可消除矛盾”的最小改动。
+
+    流程：复用 parse_text 逐行校验（输入错误直接返回逐行错误）；原文本可解时
+    明确说明无需修订；联立矛盾时遍历每条有效约束行，暂时移除该行的上、下界
+    两条边后对其余行运行 Bellman-Ford——仍矛盾的行排除（只改该行一个端点救不回
+    其余行自身的矛盾）；其余可解时复用冗余核对同款 _derive_bound 求这两个事件
+    时间差的最紧可行区间 [dl, dh]：
+
+    - 上界冲突（dh < low）：只放宽下界至 dh（low' = dh，上界不动），改动 low − dh 分钟，
+      证据为推出该最紧上界的原始行号与界值推导链；
+    - 下界冲突（dl > high）：只放宽上界至 dl（high' = dl，下界不动），改动 dl − high 分钟，
+      证据为推出该最紧下界的原始行号与界值推导链。
+
+    区间含整数端点，移到边界即首次相交的整数分钟，改动量最小。建议按改动分钟数、
+    原始行号升序排序；没有任何单行修复时明确提示。
+    """
+    rows, errors = parse_text(text)
+    if errors:
+        return {"status": "error", "errors": errors}
+    if not rows:
+        return {
+            "status": "error",
+            "errors": [{"line": None, "message": "没有可联立的有效约束行。"}],
+        }
+
+    result = solve_rows(rows)
+    if result["status"] == "ok":
+        return {
+            "status": "ok",
+            "message": "原文本区间无冲突，无需修订。",
+            "event_count": len(result["names"]),
+            "line_count": len(rows),
+        }
+
+    # 冲突分支不含内部结构，重建图（与 solve_rows 同一套建边逻辑）
+    names, index, all_edges = _build_graph(rows)
+
+    suggestions: list[dict] = []
+    for row in rows:
+        # 暂时移除该行的上、下界两条约束，其余行照常联立
+        edges = [e for e in all_edges if e.line != row.line]
+        rest_rows = [r for r in rows if r.line != row.line]
+        if rest_rows and solve_rows(rest_rows)["status"] != "ok":
+            continue  # 其余行自身仍矛盾：只改该行一个端点无法修复，排除
+        # 其余行为空时无任何约束，必然可解
+
+        ia, ib = index[row.a], index[row.b]
+        # 其余约束推出的最紧可行区间 [derived_low, derived_high]（两端必有界，否则其余行无解）
+        high_val, upper_path = _derive_bound(names, edges, ia, ib)
+        low_val, lower_path = _derive_bound(names, edges, ib, ia)
+        derived_high = high_val
+        derived_low = -low_val if low_val is not None else None
+        if derived_low is None or derived_high is None:
+            continue  # 防御：其余行可解时两事件互相可达，两端必有界
+
+        if derived_high < row.low:
+            # 上界冲突：只放宽下界至首次相交的整数分钟 derived_high
+            suggestions.append({
+                "line": row.line,
+                "a": row.a,
+                "b": row.b,
+                "low": row.low,
+                "high": row.high,
+                "endpoint": "low",
+                "endpoint_label": "下界（最少分钟）",
+                "old_value": row.low,
+                "new_value": derived_high,
+                "change_minutes": row.low - derived_high,
+                "new_line": _row_text(row, derived_high, row.high),
+                "derived_low": derived_low,
+                "derived_high": derived_high,
+                "forcing_path": upper_path,
+                "forcing_lines": [s["line"] for s in upper_path],
+            })
+        elif derived_low > row.high:
+            # 下界冲突：只放宽上界至首次相交的整数分钟 derived_low
+            suggestions.append({
+                "line": row.line,
+                "a": row.a,
+                "b": row.b,
+                "low": row.low,
+                "high": row.high,
+                "endpoint": "high",
+                "endpoint_label": "上界（最多分钟）",
+                "old_value": row.high,
+                "new_value": derived_low,
+                "change_minutes": derived_low - row.high,
+                "new_line": _row_text(row, row.low, derived_low),
+                "derived_low": derived_low,
+                "derived_high": derived_high,
+                "forcing_path": lower_path,
+                "forcing_lines": [s["line"] for s in lower_path],
+            })
+        # 其余情形（该行区间已含推导区间）说明其余行不可能可解，不会走到
+
+    suggestions.sort(key=lambda s: (s["change_minutes"], s["line"]))
+
+    return {
+        "status": "conflict",
+        "conflict": result["conflict"],
+        "suggestions": suggestions,
+        "suggestion_count": len(suggestions),
+        "checked_lines": len(rows),
+        "event_count": len(names),
+        "line_count": len(rows),
     }

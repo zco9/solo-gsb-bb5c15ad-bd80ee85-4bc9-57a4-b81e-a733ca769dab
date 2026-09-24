@@ -251,3 +251,22 @@ ul.plain li { padding: 4px 0; font-size: 14px; }
   color: var(--muted);
   margin: 0 0 10px;
 }
+
+/* 冲突单行修订建议 */
+.repair-card h3 { word-break: break-all; }
+.repair-newline {
+  font-size: 14px;
+  margin: 10px 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.repair-apply {
+  padding: 4px 14px;
+  font-size: 13px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.repair-apply:hover { background: #75491f; }

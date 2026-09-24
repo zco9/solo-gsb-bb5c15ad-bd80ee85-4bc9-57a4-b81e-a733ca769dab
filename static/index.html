@@ -13,7 +13,8 @@
       <p class="subtitle">
         每行输入 <code>事件甲,事件乙,最少分钟,最多分钟</code>，表示
         <strong>事件乙比事件甲晚</strong>发生的时间差区间（分钟，可填负数表示乙更早）。
-        系统联立全部区间：若互相矛盾，给出由<strong>原始行号与上下界</strong>构成的闭合矛盾链；
+        系统联立全部区间：若互相矛盾，给出由<strong>原始行号与上下界</strong>构成的闭合矛盾链，
+        并可进一步给出<strong>冲突单行修订建议</strong>——只放宽某一行的一个端点即可消除矛盾的最小改动；
         否则给出以最早事件为第 0 分钟的可行时间线。
         此外可任选一条原始行做<strong>约束冗余核对</strong>：删去该行后，检验其余叙述是否仍必然满足它的时间差区间；
         也可把<strong>基准版与修订版</strong>两版文本分别粘贴做<strong>两版比较</strong>：按事件名对齐，给出新增、删除事件与共同事件的分钟变化及修订行证据。
@@ -46,6 +47,21 @@
     </section>
 
     <section id="redundancy-result" aria-live="polite"></section>
+
+    <section class="input-area">
+      <label><strong>冲突单行修订建议</strong></label>
+      <p class="muted" style="margin-top:0">
+        当上方文本语法有效但联立矛盾时，后端逐行暂时移除该行的上下界：其余行仍矛盾的行排除；
+        其余可解时求这两个事件时间差的<strong>最紧可行区间</strong>，只放宽该行<strong>一个端点</strong>至首次相交的整数分钟，
+        给出<strong>最小改动量、替换后的整行</strong>，以及迫使该端点移动的<strong>原始行号与界值推导链</strong>。
+        建议按改动分钟数、原始行号排序；点击<strong>“填入此建议”</strong>可把替换后的整行写回上方文本框（编辑后旧建议自动清空）。
+      </p>
+      <div class="button-row" style="margin-top:0">
+        <button id="btn-repair" class="primary">获取修订建议</button>
+      </div>
+    </section>
+
+    <section id="repair-result" aria-live="polite"></section>
 
     <section class="input-area">
       <label><strong>两版比较（基准文本 / 修订文本）</strong></label>
