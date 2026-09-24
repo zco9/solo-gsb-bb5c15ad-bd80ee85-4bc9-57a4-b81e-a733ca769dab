@@ -16,6 +16,12 @@
     乙->甲 最短路取负 = 其余约束能推出的 t(乙)-t(甲) 最紧下界（不可达则无界）
 仅当推导区间 [下界, 上界] 完全落在所选行区间 [lo, hi] 内时判为“可删”。
 
+冲突单行修订建议（suggest_repairs）：语法有效但联立矛盾时，逐行暂时移除该行的
+上、下界两条边——其余行仍含负环则排除该行；其余行可解则复用 _derive_bound 求
+其余约束对该行两事件时间差的最紧可行区间，原区间与推导区间不相交时只放宽相抵的
+那个端点到“两区间首次相交的整数分钟”，给出最小改动分钟数、替换后的整行及迫使
+该端点移动的最紧界推导链（原始行号、上/下界与界值）；按改动分钟数、原始行号排序。
+
 两版比较（compare_texts）：基准文本与修订文本各自独立 parse_text + solve_rows，
 任一版校验失败或存在负环时，分别原样带上该版错误/闭合矛盾链，不生成差异结论；
 两版均可解时，以“最早事件第 0 分钟”的规范化时刻按事件名对齐，列出共同事件的
@@ -376,6 +382,168 @@ def check_redundancy(text: str, line: int) -> dict:
         "verdict": "removable" if removable else "necessary",
         "event_count": len(names),
         "line_count": len(rows),
+    }
+
+
+# ---------- 冲突单行修订建议 ----------
+
+def _has_negative_cycle(n: int, edges: list[Edge]) -> bool:
+    """在给定边上跑 Bellman-Ford，判定是否含负环（与 solve_rows 同款虚拟源初始化）。"""
+    if n == 0:
+        return False
+    dist = [0] * n
+    for iteration in range(n):
+        relaxed = False
+        for e in edges:
+            cand = dist[e.u] + e.w
+            if cand < dist[e.v]:
+                dist[e.v] = cand
+                relaxed = True
+        if not relaxed:
+            return False
+        if iteration == n - 1:
+            return True
+    return False
+
+
+def suggest_repairs(text: str) -> dict:
+    """语法有效但联立矛盾时，逐行给出“只放宽该行一个端点”的最小修订建议。
+
+    对每条原始行：暂时移除该行上、下界两条边；
+    - 其余行仍含负环（仍矛盾）⇒ 该行无法单行修复，排除；
+    - 其余行可解 ⇒ 复用 _derive_bound 求其余约束对这两个事件时间差的最紧可行区间
+      [derived_low, derived_high]（推不出的端点为无界）；
+    - 原区间与推导区间不相交时，只放宽相抵的那个端点到两区间“首次相交的整数分钟”
+      （放宽上界至推导下界，或放宽下界至推导上界），改动量即移动的分钟数；
+      迫使该端点移动的最紧界推导路径（原始行号、所用界与界值）作为证据一并返回。
+    建议按改动分钟数升序、再按原始行号升序排列。
+    输入无效返回逐行错误；原文本可解时明确说明无需修订。
+    """
+    rows, result = _parse_and_solve(text)
+    if result["status"] == "error":
+        return result
+    if result["status"] == "ok":
+        return {
+            "status": "ok",
+            "repair_needed": False,
+            "message": "原文本联立可解、无矛盾，无需单行修订。",
+            "event_count": len(result["names"]),
+            "line_count": len(rows),
+        }
+
+    # result["status"] == "conflict"：原文本语法有效但联立矛盾
+    # solve_rows 冲突时只返回公开矛盾链，内部图在此按全部有效行重建
+    names, index, all_edges = _build_graph(rows)
+    n = len(names)
+
+    suggestions: list[dict] = []
+    for target in rows:
+        edges = [e for e in all_edges if e.line != target.line]
+
+        # 其余行仍然矛盾：单行放宽该行救不回来，排除
+        if _has_negative_cycle(n, edges):
+            continue
+
+        # 同一事件时间差恒为 0；其余行可解时最紧可行区间就是 [0, 0]，无推导环
+        if target.a == target.b:
+            derived_low: int | None = 0
+            derived_high: int | None = 0
+            upper_path: list[dict] = []
+            lower_path: list[dict] = []
+        else:
+            ia, ib = index[target.a], index[target.b]
+            derived_high, upper_path = _derive_bound(names, edges, ia, ib)
+            back_val, lower_path = _derive_bound(names, edges, ib, ia)
+            derived_low = -back_val if back_val is not None else None
+
+        low_bounded = derived_low is not None
+        high_bounded = derived_high is not None
+
+        endpoint = None  # "upper"：放宽上界；"lower"：放宽下界
+        new_low, new_high = target.low, target.high
+        change = 0
+        forcing_path: list[dict] = []
+        forcing_bound: int | None = None
+
+        # 原区间整体低于推导区间：上界相抵，把上界放宽至推导下界（首次相交的整数分钟）
+        if low_bounded and target.high < derived_low:
+            endpoint = "upper"
+            new_high = derived_low
+            change = new_high - target.high
+            forcing_path = lower_path
+            forcing_bound = derived_low
+        # 原区间整体高于推导区间：下界相抵，把下界放宽至推导上界（首次相交的整数分钟）
+        elif high_bounded and target.low > derived_high:
+            endpoint = "lower"
+            new_low = derived_high
+            change = target.low - new_low
+            forcing_path = upper_path
+            forcing_bound = derived_high
+
+        # 区间已相交（端点恰好相等也算相交）或相抵端无界无法定出首次相交点：无单行建议
+        if endpoint is None or change <= 0:
+            continue
+
+        forcing_lines: list[int] = []
+        for step in forcing_path:  # 行号去重保序
+            if step["line"] not in forcing_lines:
+                forcing_lines.append(step["line"])
+
+        if endpoint == "upper":
+            endpoint_label = "上界（最多）"
+            action = (
+                f"把上界由 {target.high} 放宽至 {new_high}（仅放宽上界 {change} 分钟），"
+                f"与其余约束推出的最紧下界 {new_high} 首次相交"
+            )
+            forced_relation = f"其余约束推出 t({target.b})−t({target.a}) ≥ {forcing_bound}，迫使上界至少放宽到 {forcing_bound}"
+        else:
+            endpoint_label = "下界（最少）"
+            action = (
+                f"把下界由 {target.low} 放宽至 {new_low}（仅放宽下界 {change} 分钟），"
+                f"与其余约束推出的最紧上界 {new_low} 首次相交"
+            )
+            forced_relation = f"其余约束推出 t({target.b})−t({target.a}) ≤ {forcing_bound}，迫使下界至少放宽到 {forcing_bound}"
+
+        suggestions.append({
+            "line": target.line,
+            "a": target.a,
+            "b": target.b,
+            "low": target.low,
+            "high": target.high,
+            "new_low": new_low,
+            "new_high": new_high,
+            "endpoint": endpoint,
+            "endpoint_label": endpoint_label,
+            "change_minutes": change,
+            "action": action,
+            "forced_relation": forced_relation,
+            "replacement": f"{target.a},{target.b},{new_low},{new_high}",
+            "derived_low": derived_low,
+            "derived_high": derived_high,
+            "lower_bounded": low_bounded,
+            "upper_bounded": high_bounded,
+            "forcing_direction": "lower" if endpoint == "upper" else "upper",
+            "forcing_bound": forcing_bound,
+            "forcing_lines": forcing_lines,
+            "forcing_path": forcing_path,
+        })
+
+    suggestions.sort(key=lambda s: (s["change_minutes"], s["line"]))
+
+    return {
+        "status": "conflict",
+        "repair_needed": True,
+        "conflict": result["conflict"],
+        "suggestions": suggestions,
+        "suggestion_count": len(suggestions),
+        "line_count": len(rows),
+        "event_count": len(names),
+        "message": (
+            f"遍历 {len(rows)} 条原始行，找到 {len(suggestions)} 条单行修订建议"
+            "（按改动分钟数、原始行号排序）。"
+            if suggestions
+            else f"遍历全部 {len(rows)} 条原始行后，没有任何一条可以只放宽一个端点修复矛盾：每条行移除后其余行仍然矛盾，或相抵端无界无法确定首次相交点。需要同时修改至少两行。"
+        ),
     }
 
 

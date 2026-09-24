@@ -15,6 +15,8 @@
         <strong>事件乙比事件甲晚</strong>发生的时间差区间（分钟，可填负数表示乙更早）。
         系统联立全部区间：若互相矛盾，给出由<strong>原始行号与上下界</strong>构成的闭合矛盾链；
         否则给出以最早事件为第 0 分钟的可行时间线。
+        矛盾时还可逐行给出<strong>冲突单行修订建议</strong>：只放宽某一行的一个端点到首次相交的整数分钟，
+        给出最小改动量、替换后的整行及迫使该端点移动的原始行号与界值推导链。
         此外可任选一条原始行做<strong>约束冗余核对</strong>：删去该行后，检验其余叙述是否仍必然满足它的时间差区间；
         也可把<strong>基准版与修订版</strong>两版文本分别粘贴做<strong>两版比较</strong>：按事件名对齐，给出新增、删除事件与共同事件的分钟变化及修订行证据。
       </p>
@@ -26,11 +28,14 @@
         placeholder="起床,吃饭,30,120&#10;吃饭,开会,60,180&#10;开会,起床,-200,-150"></textarea>
       <div class="button-row">
         <button id="btn-solve" class="primary">联立核对</button>
+        <button id="btn-repair">冲突单行修订建议</button>
         <button id="btn-example-ok">填入可行示例</button>
         <button id="btn-example-conflict">填入矛盾示例</button>
         <button id="btn-clear" class="ghost">清空</button>
       </div>
     </section>
+
+    <section id="repair-result" aria-live="polite"></section>
 
     <section class="input-area">
       <label for="redundancy-line"><strong>约束冗余核对</strong></label>

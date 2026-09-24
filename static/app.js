@@ -191,6 +191,135 @@ async function solve() {
   }
 }
 
+// ---------- 冲突单行修订建议 ----------
+
+const repairEl = $("repair-result");
+let repairSuggestions = [];
+
+function renderRepair(data) {
+  repairSuggestions = data.suggestions || [];
+
+  if (data.status === "ok") {
+    // 原文本可解：明确提示无需修订
+    repairEl.innerHTML = `
+      <div class="banner ok">
+        <h2>✓ 无需修订</h2>
+        <p>${esc(data.message)}</p>
+      </div>`;
+    return;
+  }
+  if (data.status === "error") {
+    // 输入错误：逐行错误，与 /api/solve 完全一致
+    renderErrors(data.errors || [{ line: null, message: "未知错误。" }], repairEl);
+    repairEl.insertAdjacentHTML("afterbegin",
+      `<p class="muted">输入未通过校验，无法给出单行修订建议；请先修正下列语法错误后重试：</p>`);
+    return;
+  }
+
+  // status === "conflict"：语法有效、联立矛盾
+  const cards = repairSuggestions.map((s, i) => {
+    const lowText = s.lower_bounded ? String(s.derived_low) : "−∞（无界）";
+    const highText = s.upper_bounded ? String(s.derived_high) : "+∞（无界）";
+    const rank = i === 0 ? "（改动最小）" : "";
+
+    // 迫使该端点移动的最紧界推导链（原始行号、上/下界与界值）；同一事件时间差恒为 0 时无推导环
+    const forcingHtml = s.forcing_path.length
+      ? `<p class="ev-head">${esc(s.forced_relation)}；该紧界由
+         <strong>第 ${s.forcing_lines.map(esc).join("、")} 行</strong>沿以下推导链给出
+         （每环标注原始行号、所用界与界值）：</p>
+         ${pathChainHtml(s.forcing_path)}
+         ${pathTableHtml(s.forcing_path)}`
+      : `<p class="ev-head">${esc(s.forced_relation)}：两事件为同一事件，时间差恒为 0，无需其他约束推导。</p>`;
+
+    return `
+    <div class="card repair-card">
+      <h3>建议 ${i + 1}${rank}：修订第 ${s.line} 行 —— 放宽${esc(s.endpoint_label)} ${s.change_minutes} 分钟</h3>
+      <p>${esc(s.action)}。</p>
+      <table>
+        <thead><tr>
+          <th>区间</th><th class="num">下界（最少分钟）</th><th class="num">上界（最多分钟）</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td>第 ${s.line} 行原区间：${esc(s.a)} → ${esc(s.b)}</td>
+            <td class="num">${s.low}</td>
+            <td class="num">${s.high}</td>
+          </tr>
+          <tr>
+            <td>暂时移除该行后，其余约束的最紧可行区间</td>
+            <td class="num">${lowText}</td>
+            <td class="num">${highText}</td>
+          </tr>
+          <tr>
+            <td>单行修订后区间（与其余约束首次相交）</td>
+            <td class="num">${s.new_low}</td>
+            <td class="num">${s.new_high}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="repair-replace">
+        <div class="repair-replace-text">
+          <span class="muted">替换后的整行（填入文本框第 ${s.line} 行，改动量 ${s.change_minutes} 分钟）：</span>
+          <code class="repair-line">${esc(s.replacement)}</code>
+        </div>
+        <button class="primary" data-repair-idx="${i}">填入此建议</button>
+      </div>
+      ${forcingHtml}
+    </div>`;
+  }).join("");
+
+  const noFixNote = repairSuggestions.length
+    ? ""
+    : `<div class="card"><p class="muted">原始闭合矛盾链见上方“联立核对”结果。
+        每条行单独移除后其余行仍然矛盾（或相抵端无界、无法确定首次相交点），
+        请尝试同时放宽至少两行后重新联立。</p></div>`;
+
+  repairEl.innerHTML = `
+    <div class="banner conflict">
+      <h2>冲突单行修订建议</h2>
+      <p>${esc(data.message)}</p>
+    </div>
+    ${noFixNote}
+    ${cards}`;
+}
+
+async function requestRepair() {
+  repairEl.innerHTML = `<div class="card muted">逐行暂时移除约束、试算单行修订中…</div>`;
+  try {
+    const resp = await fetch("/api/repair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: inputEl.value }),
+    });
+    const data = await resp.json();
+    renderRepair(data);
+  } catch (err) {
+    repairEl.innerHTML = `
+      <div class="banner err"><h2>请求失败</h2><p>${esc(err.message)}</p></div>`;
+  }
+}
+
+// 把选中的建议替换进文本框对应原始行：旧结果作废并立即重新联立验证
+function applyRepairSuggestion(idx) {
+  const s = repairSuggestions[idx];
+  if (!s) return;
+  const lines = inputEl.value.split("\n");
+  if (lines[s.line - 1] === undefined) return;
+  lines[s.line - 1] = s.replacement;
+  inputEl.value = lines.join("\n");
+  refreshLineOptions();
+  repairEl.innerHTML = "";  // 已按建议编辑，旧建议作废
+  redundancyEl.innerHTML = "";
+  solve();
+  inputEl.focus();
+}
+
+repairEl.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-repair-idx]");
+  if (btn) applyRepairSuggestion(parseInt(btn.dataset.repairIdx, 10));
+});
+$("btn-repair").addEventListener("click", requestRepair);
+
 // ---------- 约束冗余核对 ----------
 
 // 文本变化时刷新可选行（跳过空行，行号保持原始行号）
@@ -389,6 +518,7 @@ $("btn-clear").addEventListener("click", () => {
   inputEl.value = "";
   resultEl.innerHTML = "";
   redundancyEl.innerHTML = "";
+  repairEl.innerHTML = "";
   refreshLineOptions();
   inputEl.focus();
 });
@@ -396,6 +526,7 @@ $("btn-redundancy").addEventListener("click", checkRedundancy);
 inputEl.addEventListener("input", () => {
   refreshLineOptions();
   redundancyEl.innerHTML = "";  // 文本已变，旧的冗余结论作废
+  repairEl.innerHTML = "";      // 文本已变，旧的单行修订建议作废
 });
 refreshLineOptions();
 

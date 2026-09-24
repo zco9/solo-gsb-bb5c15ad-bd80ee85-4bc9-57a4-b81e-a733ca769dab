@@ -1,5 +1,5 @@
 """FastAPI 入口：提供静态页面与 /api/solve 联立求解、/api/redundancy 约束冗余核对、
-/api/compare 两版比较接口。"""
+/api/repair 冲突单行修订建议、/api/compare 两版比较接口。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .solver import check_redundancy, compare_texts, solve
+from .solver import check_redundancy, compare_texts, solve, suggest_repairs
 
-app = FastAPI(title="口述史事件时间线核对", version="1.2.0")
+app = FastAPI(title="口述史事件时间线核对", version="1.3.0")
 
 
 class SolveRequest(BaseModel):
@@ -40,6 +40,12 @@ def api_solve(req: SolveRequest) -> dict:
 @app.post("/api/redundancy")
 def api_redundancy(req: RedundancyRequest) -> dict:
     return check_redundancy(req.text or "", req.line)
+
+
+@app.post("/api/repair")
+def api_repair(req: SolveRequest) -> dict:
+    # 复用同一套 parse_text 与 Bellman-Ford：逐行移除单行后求最紧可行区间与单行修订建议
+    return suggest_repairs(req.text or "")
 
 
 @app.post("/api/compare")

@@ -241,6 +241,34 @@ ul.plain li { padding: 4px 0; font-size: 14px; }
 .change-tag.changed { background: #fbf1e4; color: #8a5a2b; }
 .change-tag.unchanged { background: #ece7db; color: var(--muted); }
 
+/* 冲突单行修订建议 */
+.repair-card h3 { word-break: break-all; }
+.repair-card .ev-head {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 8px 0 6px;
+}
+.repair-replace {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: #faf8f3;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.repair-replace-text { display: flex; flex-direction: column; gap: 4px; }
+.repair-line {
+  font-size: 14px;
+  background: #ece7db;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+}
+
 .compare-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 640px) {
   .compare-cols { grid-template-columns: 1fr; }
